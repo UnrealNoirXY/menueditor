@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║         MORESCO MENU STUDIO  ·  v7.0  ·  Smart Edition          ║
+║         NOIR MENU STUDIO  ·  v7.0  ·  Smart Edition          ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  Fix v7.0:                                                       ║
 ║  • Fix CRITICO: titoli doppi/tripli nel PDF (_split_bilingue)    ║
@@ -31,7 +31,7 @@ try:
 except Exception:
     PDF_DISPONIBILE = False
 
-st.set_page_config(page_title="Moresco Menu Studio", layout="wide", page_icon="🍽️")
+st.set_page_config(page_title="Noir Menu Studio", layout="wide", page_icon="🍽️")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -804,6 +804,7 @@ def _assicura_colonne_menu(df: pd.DataFrame) -> pd.DataFrame:
         'Ordine':       lambda n: list(range(1, n + 1)),
         'Pagina':       1, 'Separatore': SEP_LINEA,
         'Visibile':     True, 'Disponibile': True,
+        'Forza Salto Pagina': False,
         'Categoria EN': '', 'Colore Cat.': '#b58d3d',
         'Nome EN':      '', 'Descrizione EN': '',
         'Note Chef':    '', 'Scala Piatto': 1.0, 'Spazio Extra': 0.0,
@@ -818,6 +819,7 @@ def _assicura_colonne_menu(df: pd.DataFrame) -> pd.DataFrame:
     df['Spazio Extra'] = pd.to_numeric(df['Spazio Extra'], errors='coerce').fillna(0.0)
     df['Visibile']     = df['Visibile'].apply(_safe_bool)
     df['Disponibile']  = df['Disponibile'].apply(_safe_bool)
+    df['Forza Salto Pagina'] = df['Forza Salto Pagina'].apply(_safe_bool)
     df['Separatore']   = df['Separatore'].apply(_norm_separatore)
     df['Colore Cat.']  = df['Colore Cat.'].apply(_norm_colore)
     return df
@@ -1036,7 +1038,8 @@ def _componi_titolo_cat(cat_it: str, cat_en: str, mostra_cat_en: bool) -> str:
 def genera_html(df: pd.DataFrame, logo_b64, bg_b64, stile_sfondo, titolo_menu,
                 testo_footer, logo_size_px, base_font_px,
                 mostra_nome_en=True, mostra_cat_en=True,
-                template_key=TEMPLATE_CLASSICO) -> str:
+                template_key=TEMPLATE_CLASSICO,
+                disabilita_autopaginazione=False) -> str:
     if 'Ordine' in df.columns:
         df = df.sort_values(['Pagina', 'Ordine']).reset_index(drop=True)
 
@@ -1103,19 +1106,29 @@ def genera_html(df: pd.DataFrame, logo_b64, bg_b64, stile_sfondo, titolo_menu,
 
         # ── FIX CRITICO: costruzione titolo categoria senza duplicati ──
         titolo_cat = _componi_titolo_cat(cat_it, cat_en, mostra_cat_en)
+        forza_salto = _safe_bool(row.get('Forza Salto Pagina', False))
 
-        # Cambio gruppo-pagina
-        if pagina != pagina_corrente:
+        # Regola A: Cambio Pagina Manuale (Pagina != pagina_corrente)
+        # Regola B: Forza Salto Explicit (forza_salto == True)
+        if (pagina != pagina_corrente) or forza_salto:
             if foglio_aperto:
                 chiudi_foglio()
+
             pagina_corrente = pagina
-            cat_corrente = None
-            apri_foglio(titolo_cat, colore, primo_foglio, True)
+
+            # Gestione Titoli Categoria (Continua)
+            # Se la categoria è la stessa della riga precedente (anche se abbiamo cambiato pagina),
+            # aggiungiamo (Continua)
+            tit_da_stampare = titolo_cat
+            if cat_it == cat_corrente:
+                tit_da_stampare = f"{titolo_cat} (Continua)"
+
+            apri_foglio(tit_da_stampare, colore, primo_foglio, True)
             cat_corrente = cat_it
             col_corrente = colore
             tit_corrente = titolo_cat
 
-        # Cambio categoria (stesso gruppo)
+        # Cambio categoria (stessa pagina)
         elif cat_it != cat_corrente:
             if not foglio_aperto:
                 apri_foglio(titolo_cat, colore, primo_foglio, True)
@@ -1129,11 +1142,18 @@ def genera_html(df: pd.DataFrame, logo_b64, bg_b64, stile_sfondo, titolo_menu,
             col_corrente = colore
             tit_corrente = titolo_cat
 
-        # Auto-paginazione
+        # Regola C: Auto-paginazione Condizionata
         stima = _stima_piatto(row)
-        if foglio_aperto and usata + stima > _disp_foglio(primo_del_fog):
-            chiudi_foglio()
-            apri_foglio(tit_corrente, col_corrente, False, False)
+        if not disabilita_autopaginazione:
+            if foglio_aperto and usata + stima > _disp_foglio(primo_del_fog):
+                chiudi_foglio()
+
+                # Gestione Titoli Categoria (Continua) in auto-paginazione
+                tit_da_stampare = tit_corrente
+                if cat_it == cat_corrente:
+                    tit_da_stampare = f"{tit_corrente} (Continua)"
+
+                apri_foglio(tit_da_stampare, col_corrente, False, False)
 
         # Rendering piatto
         try:
@@ -1381,15 +1401,16 @@ with st.sidebar:
         mostra_nome_en = st.toggle('Mostra nomi piatti in inglese', value=True)
         mostra_cat_en  = st.toggle('Mostra categorie in inglese',   value=True)
 
-    with st.expander('📐 Testo & Zoom'):
+    with st.expander('📐 Testo & Impaginazione'):
         zoom_foglio = st.slider('Scala testi', 0.55, 1.20, 0.95, 0.05,
                                 help='16px × zoom = font-size base del foglio A4')
+        disabilita_autopaginazione = st.toggle('🛑 Disabilita auto-paginazione (Controllo 100% Manuale)', value=False)
 
     with st.expander('🍷 Aperitivi'):
         pagina_unica_aper = st.toggle('Tutto su un foglio A4', value=False)
 
     with st.expander('📁 Nomi File Export'):
-        nome_file_menu = st.text_input('Nome file menu', 'Menu_Moresco')
+        nome_file_menu = st.text_input('Nome file menu', 'Menu_Noir')
         nome_file_aper = st.text_input('Nome file aperitivi', 'Menu_Aperitivi')
 
     with st.expander('💾 Carica Progetto Menu'):
@@ -1417,7 +1438,7 @@ with st.sidebar:
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 st.markdown(
     '<div class="menu-banner">'
-    '<h1>🍽️ Moresco Menu Studio</h1>'
+    '<h1>🍽️ Noir Menu Studio</h1>'
     '<p>v7.0 · Smart Edition · Parser macchina-a-stati · Editor pannelli · Layout Check · Template</p>'
     '</div>', unsafe_allow_html=True,
 )
@@ -1530,6 +1551,34 @@ with tab_menu:
             render_mappa_pagine(mappa)
         with _layout_check_placeholder:
             render_layout_check(df_base)
+
+        # ────────────────────────────────────────────────────────
+        # PANNELLO: Organizzazione Pagine (Assegnazione Massiva)
+        # ────────────────────────────────────────────────────────
+        with st.expander("🏗️ Organizzazione Pagine (Assegnazione Massiva)", expanded=False):
+            st.markdown("Sposta rapidamente tutte le portate di una categoria in una pagina specifica.")
+
+            # Ottieni categorie uniche mantenendo l'ordine
+            categorie_uniche = []
+            for c in df_base['Categoria IT'].apply(_safe_str).tolist():
+                if c and c not in categorie_uniche:
+                    categorie_uniche.append(c)
+
+            if categorie_uniche:
+                c1, c2, c3 = st.columns([2, 1, 1])
+                with c1:
+                    cat_da_spostare = st.selectbox("Seleziona Categoria", categorie_uniche)
+                with c2:
+                    nuova_pag_target = st.number_input("Alla Pagina", min_value=1, value=1, step=1)
+                with c3:
+                    st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+                    if st.button("Sposta Tutti", use_container_width=True):
+                        mask = st.session_state.dati_menu['Categoria IT'].apply(_safe_str) == cat_da_spostare
+                        st.session_state.dati_menu.loc[mask, 'Pagina'] = int(nuova_pag_target)
+                        st.success(f"✅ Tutti i '{cat_da_spostare}' spostati a Pagina {nuova_pag_target}")
+                        st.rerun()
+            else:
+                st.caption("Nessuna categoria trovata.")
 
         st.markdown('### ✏️ Editor Piatti')
 
@@ -1649,6 +1698,10 @@ with tab_menu:
                         with c6:
                             f_disp = st.checkbox('✅ Disponibile',
                                                  value=_safe_bool(row.get('Disponibile', True)))
+
+                        f_forza_salto = st.checkbox('✂️ Forza nuova pagina prima di questo piatto',
+                                                    value=_safe_bool(row.get('Forza Salto Pagina', False)))
+
                         f_note = st.text_input('📝 Note Chef (non stampate)',
                                                value=_safe_str(row.get('Note Chef','')))
 
@@ -1664,7 +1717,8 @@ with tab_menu:
                             ('Nome IT', f_nome_it), ('Nome EN', f_nome_en),
                             ('Descrizione IT', f_desc_it), ('Descrizione EN', f_desc_en),
                             ('Prezzo', f_prezzo), ('Allergeni', f_allerg),
-                            ('Visibile', f_vis), ('Disponibile', f_disp), ('Note Chef', f_note),
+                            ('Visibile', f_vis), ('Disponibile', f_disp),
+                            ('Forza Salto Pagina', f_forza_salto), ('Note Chef', f_note),
                         ]:
                             st.session_state.dati_menu.loc[sel, col_k] = val_v
                         st.success('✅ Salvato!')
@@ -1752,6 +1806,7 @@ with tab_menu:
                         'Separatore': st.column_config.SelectboxColumn('Sep.', options=SEP_OPTIONS, width='small'),
                         'Visibile':   st.column_config.CheckboxColumn('👁️', width='small'),
                         'Disponibile':st.column_config.CheckboxColumn('✅', width='small'),
+                        'Forza Salto Pagina': st.column_config.CheckboxColumn('✂️', width='small'),
                         'Scala Piatto':st.column_config.NumberColumn('Scala', min_value=0.4, max_value=2.0, step=0.05, format='%.2f', width='small'),
                         'Spazio Extra':st.column_config.NumberColumn('Spazio', min_value=0.0, max_value=10.0, step=0.25, format='%.2f', width='small'),
                         'Categoria IT': st.column_config.TextColumn('Cat IT', width='medium'),
@@ -1769,7 +1824,7 @@ with tab_menu:
                         st.session_state.dati_menu,
                         use_container_width=True, num_rows='dynamic', height=400,
                         column_config=col_cfg_adv,
-                        column_order=['Ordine','Pagina','Separatore','Visibile','Disponibile',
+                        column_order=['Ordine','Pagina','Separatore','Visibile','Disponibile','Forza Salto Pagina',
                                       'Scala Piatto','Spazio Extra','Categoria IT','Categoria EN',
                                       'Colore Cat.','Nome IT','Nome EN','Descrizione IT',
                                       'Descrizione EN','Prezzo','Allergeni','Note Chef'],
@@ -1806,6 +1861,7 @@ with tab_menu:
             mostra_nome_en=mostra_nome_en,
             mostra_cat_en=mostra_cat_en,
             template_key=template_sel,
+            disabilita_autopaginazione=disabilita_autopaginazione,
         )
 
         n_fogli = html_content.count('class="foglio-a4"')
