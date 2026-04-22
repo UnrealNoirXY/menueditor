@@ -124,14 +124,24 @@ GLOBAL_CSS = """
 .piatto-card .prezzo { font-size: 0.95em; font-weight: 600; margin-top: 4px; }
 .piatto-card .allerg { font-size: 0.75em; color: #b58d3d; font-style: italic; }
 
-/* Sticky Preview Layout */
-[data-testid="stVerticalBlock"] > [data-testid="stColumn"]:nth-child(2) [data-testid="stVerticalBlock"] {
-    position: sticky;
-    top: 2rem;
+/* Split-Screen Layout Optimization */
+/* Colonna SX (Controlli) scrollabile */
+[data-testid="stVerticalBlock"] > [data-testid="stColumn"]:nth-child(1) {
     height: calc(100vh - 4rem);
     overflow-y: auto;
-    border-left: 1px solid #ddd;
-    padding-left: 20px;
+    padding-right: 15px;
+}
+
+/* Colonna DX (Anteprima) Sticky */
+[data-testid="stVerticalBlock"] > [data-testid="stColumn"]:nth-child(2) [data-testid="stVerticalBlock"] {
+    position: sticky;
+    top: 1rem;
+    height: calc(100vh - 3rem);
+    overflow-y: auto;
+    border-left: 2px solid #5a3e1b;
+    padding-left: 25px;
+    background: #2b2b2b; /* Sfondo scuro per far risaltare i fogli */
+    border-radius: 8px;
 }
 
 /* Kanban Cards & Page Builder UI */
@@ -1027,11 +1037,12 @@ def _build_css_menu(bg_b64, stile_sfondo, base_font_px, template_key) -> str:
 *,*::before,*::after {{ box-sizing:border-box; margin:0; padding:0; }}
 body {{ background-color:#d0cfc9; font-family:{t['font_family']};
         margin:0; padding:24px 0; display:flex; flex-direction:column;
-        align-items:center; gap:32px; }}
+        align-items:center; gap:0; }}
 .foglio-a4 {{ width:210mm; height:297mm; font-size:{base_font_px}px;
               {css_bg} background-color:{t['bg_color']}; position:relative;
               page-break-after:always; break-after:page;
-              box-shadow:0 6px 28px rgba(0,0,0,0.25); color:#2b2b2b; text-align:center; }}
+              margin-bottom: 50px !important;
+              box-shadow:0 10px 30px rgba(0,0,0,0.5); color:#2b2b2b; text-align:center; }}
 .foglio-a4:last-child {{ page-break-after:auto; break-after:auto; }}
 .content-area {{ padding:10mm 28mm 44mm 28mm; display:flex;
                  flex-direction:column; align-items:center; }}
@@ -1274,10 +1285,11 @@ def genera_html_aperitivi(df, logo_b64, bg_b64, stile_sfondo,
 @page {{ size:A4 portrait; margin:0; }}
 *,*::before,*::after {{ box-sizing:border-box; margin:0; padding:0; }}
 body {{ background-color:#d0cfc9; font-family:'Cormorant Garamond',Georgia,serif;
-        margin:0; padding:24px 0; display:flex; flex-direction:column; align-items:center; gap:32px; }}
+        margin:0; padding:24px 0; display:flex; flex-direction:column; align-items:center; gap:0; }}
 .foglio-a4 {{ width:210mm; height:297mm; font-size:{base_font_px}px; {css_bg}
               background-color:white; position:relative; page-break-after:always; break-after:page;
-              box-shadow:0 6px 28px rgba(0,0,0,0.25); color:#2b2b2b; }}
+              margin-bottom: 50px !important;
+              box-shadow:0 10px 30px rgba(0,0,0,0.5); color:#2b2b2b; }}
 .foglio-a4:last-child {{ page-break-after:auto; break-after:auto; }}
 .content-area {{ padding:10mm 26mm 44mm 26mm; display:flex; flex-direction:column; align-items:center; }}
 .header {{ display:flex; flex-direction:column; align-items:center; width:100%; margin-bottom:3mm; }}
@@ -1808,14 +1820,28 @@ with tab_menu:
                                             st.session_state.dati_menu.loc[mask_next, 'Ordine'] -= 100
                                             st.rerun()
 
-                                # Dettaglio Piatti (Expander)
-                                with st.expander("Piatti e Salti Pagina", expanded=False):
+                                # Dettaglio Piatti (Frazionatore)
+                                with st.expander("Frazionatore (Piatti)", expanded=False):
                                     df_cat_piatti = df_pag[df_pag['Categoria IT'] == cat_name]
-                                    for idx, p_row in df_cat_piatti.iterrows():
-                                        st.markdown(f"- {p_row['Nome IT']}")
-                                        fs = st.checkbox("Salto Pagina", value=_safe_bool(p_row.get('Forza Salto Pagina', False)), key=f"fs_{idx}")
-                                        if fs != _safe_bool(p_row.get('Forza Salto Pagina', False)):
-                                            st.session_state.dati_menu.loc[idx, 'Forza Salto Pagina'] = fs
+                                    for idx_in_cat, (idx, p_row) in enumerate(df_cat_piatti.iterrows()):
+                                        c_p1, c_p2 = st.columns([3, 1])
+                                        c_p1.markdown(f"<small>{p_row['Nome IT']}</small>", unsafe_allow_html=True)
+
+                                        new_pag = c_p2.number_input("Pag.", 1, 20, int(p_row['Pagina']), key=f"p_idx_{idx}", label_visibility="collapsed")
+
+                                        if new_pag != int(p_row['Pagina']):
+                                            # LOGICA SMART: Propagazione a tutti i piatti successivi della STESSA categoria
+                                            # Prendiamo tutti i piatti della categoria
+                                            mask_all_cat = (st.session_state.dati_menu['Categoria IT'] == cat_name)
+                                            indices_cat = st.session_state.dati_menu[mask_all_cat].index.tolist()
+
+                                            # Troviamo la posizione di questo piatto nella lista globale della categoria
+                                            pos = indices_cat.index(idx)
+
+                                            # Aggiorniamo questo e tutti i successivi
+                                            for i_to_upd in indices_cat[pos:]:
+                                                st.session_state.dati_menu.loc[i_to_upd, 'Pagina'] = new_pag
+
                                             st.rerun()
 
                     # Se abbiamo riempito una riga di 3, facciamo spazio per la prossima riga (automatico in st.columns)
