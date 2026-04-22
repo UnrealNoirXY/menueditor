@@ -1,18 +1,16 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║         NOIR MENU STUDIO  ·  v7.0  ·  Smart Edition          ║
+║         NOIR MENU STUDIO  ·  v7.1  ·  Visual Edition         ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  Fix v7.0:                                                       ║
-║  • Fix CRITICO: titoli doppi/tripli nel PDF (_split_bilingue)    ║
-║  • Parser À La Carte riscritto: macchina a stati                 ║
-║    → gestisce prezzo su riga separata + nomi bilingue nel nome   ║
-║  • detect_pattern potenziato: analisi stili Word + €-sola        ║
-║  • unisci_lingue smart merge (preserva EN già estratto)          ║
-║  • Editor a pannelli: lista categorie ▸ form di editing           ║
-║  • Mini-preview live del piatto nell'editor                      ║
-║  • Layout Check: barre di riempimento per pagina logica          ║
-║  • Template di stile: Classico / Moderno / Rustico               ║
-║  • Retrocompatibilità v4/v5/v6                                   ║
+║  Novità v7.1 "Visual":                                           ║
+║  • Layout Split-Screen Desktop: Editor (SX) | Anteprima (DX)     ║
+║  • Anteprima HTML Sticky: aggiornamento live senza scrolling     ║
+║  • Tabbed Experience: Database Piatti vs Visual Page Builder     ║
+║  • Visual Page Builder: Interfaccia Kanban con pagine logiche    ║
+║  • Micro-Layout Popovers: scala e spazi regolabili per blocco    ║
+║  • Monitoraggio Spazio: barre di riempimento A4 dinamiche        ║
+║  • PDF On-Demand: generazione ottimizzata per performance        ║
+║  • Sanificazione Dati: gestione robusta file Word malformati     ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
@@ -125,6 +123,42 @@ GLOBAL_CSS = """
 .piatto-card .desc-en { font-size: 0.82em; font-style: italic; color: #aaa; }
 .piatto-card .prezzo { font-size: 0.95em; font-weight: 600; margin-top: 4px; }
 .piatto-card .allerg { font-size: 0.75em; color: #b58d3d; font-style: italic; }
+
+/* Sticky Preview Layout */
+[data-testid="stVerticalBlock"] > [data-testid="stColumn"]:nth-child(2) [data-testid="stVerticalBlock"] {
+    position: sticky;
+    top: 2rem;
+    height: calc(100vh - 4rem);
+    overflow-y: auto;
+    border-left: 1px solid #ddd;
+    padding-left: 20px;
+}
+
+/* Kanban Cards & Page Builder UI */
+.kanban-column {
+    background: #f1f1f1;
+    border-radius: 8px;
+    padding: 10px;
+    min-height: 400px;
+    border: 1px solid #ccc;
+}
+.kanban-card {
+    background: white;
+    border-radius: 6px;
+    padding: 10px;
+    margin-bottom: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    border-left: 4px solid #b58d3d;
+}
+.kanban-card:hover {
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+.overflow-warning {
+    color: #e74c3c;
+    font-weight: bold;
+    font-size: 0.85em;
+    margin-top: 5px;
+}
 </style>
 """
 
@@ -711,17 +745,21 @@ PARSER_LABELS = {
 
 
 def estrai_dati_word(file):
-    doc = docx.Document(file)
-    pattern = detect_pattern(doc)
-    if pattern == 'pizza':
-        return parser_pizza(doc), pattern
-    elif pattern == 'bistrot':
-        return parser_bistrot(doc), pattern
-    elif pattern == 'taglieri':
-        file.seek(0)
-        return estrai_taglieri_word(file), pattern
-    else:
-        return parser_alacarte(doc), pattern
+    try:
+        doc = docx.Document(file)
+        pattern = detect_pattern(doc)
+        if pattern == 'pizza':
+            return parser_pizza(doc), pattern
+        elif pattern == 'bistrot':
+            return parser_bistrot(doc), pattern
+        elif pattern == 'taglieri':
+            file.seek(0)
+            return estrai_taglieri_word(file), pattern
+        else:
+            return parser_alacarte(doc), pattern
+    except Exception as e:
+        st.error(f"Errore critico durante l'estrazione Word: {e}")
+        return [], 'unknown'
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -791,6 +829,9 @@ def _norm_colore(v):
 
 
 def _assicura_colonne_menu(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=['Ordine', 'Pagina', 'Categoria IT', 'Nome IT', 'Visibile'])
+
     if 'Layout Pagina' in df.columns and 'Pagina' not in df.columns:
         df['Pagina'] = 1
         if 'Separatore' not in df.columns:
@@ -802,26 +843,39 @@ def _assicura_colonne_menu(df: pd.DataFrame) -> pd.DataFrame:
 
     defaults = {
         'Ordine':       lambda n: list(range(1, n + 1)),
-        'Pagina':       1, 'Separatore': SEP_LINEA,
-        'Visibile':     True, 'Disponibile': True,
+        'Pagina':       1,
+        'Categoria IT': 'Altro',
+        'Nome IT':      'Piatto senza nome',
+        'Separatore':   SEP_LINEA,
+        'Visibile':     True,
+        'Disponibile':  True,
         'Forza Salto Pagina': False,
-        'Categoria EN': '', 'Colore Cat.': '#b58d3d',
-        'Nome EN':      '', 'Descrizione EN': '',
-        'Note Chef':    '', 'Scala Piatto': 1.0, 'Spazio Extra': 0.0,
+        'Categoria EN': '',
+        'Colore Cat.':  '#b58d3d',
+        'Nome EN':      '',
+        'Descrizione IT': '',
+        'Descrizione EN': '',
+        'Prezzo':       '',
+        'Allergeni':    '',
+        'Note Chef':    '',
+        'Scala Piatto': 1.0,
+        'Spazio Extra': 0.0,
     }
     for col, default in defaults.items():
         if col not in df.columns:
             df[col] = default(len(df)) if callable(default) else default
 
+    # Assicuriamoci che i tipi siano corretti per evitare crash in calcoli
     df['Ordine']       = pd.to_numeric(df['Ordine'],       errors='coerce').fillna(0).astype(int)
     df['Pagina']       = df['Pagina'].apply(lambda x: _safe_int(x, 1))
-    df['Scala Piatto'] = pd.to_numeric(df['Scala Piatto'], errors='coerce').fillna(1.0)
-    df['Spazio Extra'] = pd.to_numeric(df['Spazio Extra'], errors='coerce').fillna(0.0)
+    df['Scala Piatto'] = pd.to_numeric(df['Scala Piatto'], errors='coerce').fillna(1.0).astype(float)
+    df['Spazio Extra'] = pd.to_numeric(df['Spazio Extra'], errors='coerce').fillna(0.0).astype(float)
     df['Visibile']     = df['Visibile'].apply(_safe_bool)
     df['Disponibile']  = df['Disponibile'].apply(_safe_bool)
     df['Forza Salto Pagina'] = df['Forza Salto Pagina'].apply(_safe_bool)
     df['Separatore']   = df['Separatore'].apply(_norm_separatore)
     df['Colore Cat.']  = df['Colore Cat.'].apply(_norm_colore)
+
     return df
 
 
@@ -1404,13 +1458,53 @@ with st.sidebar:
     with st.expander('📐 Testo & Impaginazione'):
         zoom_foglio = st.slider('Scala testi', 0.55, 1.20, 0.95, 0.05,
                                 help='16px × zoom = font-size base del foglio A4')
-        disabilita_autopaginazione = st.toggle('🛑 Disabilita auto-paginazione (Controllo 100% Manuale)', value=False)
+        disabilita_autopaginazione = st.toggle('🔓 Modalità Libera (Manuale 100%)', value=False,
+                                             help='Se attivo, il motore non creerà nuove pagine automaticamente. Utile per il Page Builder.')
+        if st.button("🧹 Pulisci Pagine Vuote", help="Rimuove le pagine logiche che non contengono alcun piatto."):
+            if not st.session_state.dati_menu.empty:
+                df_clean = st.session_state.dati_menu.copy()
+                # Troviamo le pagine popolate
+                pagine_popolate = df_clean[df_clean['Visibile'] == True]['Pagina'].unique()
+                if len(pagine_popolate) > 0:
+                    # Rimappiamo le pagine per chiudere i buchi
+                    mapping = {vecchia: nuova for nuova, vecchia in enumerate(sorted(pagine_popolate), 1)}
+                    df_clean['Pagina'] = df_clean['Pagina'].map(lambda x: mapping.get(x, x))
+                    st.session_state.dati_menu = df_clean
+                    st.rerun()
 
     with st.expander('🍷 Aperitivi'):
         pagina_unica_aper = st.toggle('Tutto su un foglio A4', value=False)
 
-    with st.expander('📁 Nomi File Export'):
+    with st.expander('📥 Esportazione & Download', expanded=False):
         nome_file_menu = st.text_input('Nome file menu', 'Menu_Noir')
+
+        if not st.session_state.get('dati_menu', pd.DataFrame()).empty:
+            df_export = st.session_state.dati_menu
+
+            st.download_button('💾 Salva Progetto (.json)',
+                               df_export.to_json(orient='records', force_ascii=False, indent=2),
+                               f'{nome_file_menu}.json', 'application/json',
+                               use_container_width=True, key='side_save_json')
+
+            if PDF_DISPONIBILE:
+                st.divider()
+                if st.button('⚙️ Genera file PDF', use_container_width=True, help="Avvia il rendering PDF con WeasyPrint"):
+                    if 'last_html_menu' in st.session_state:
+                        with st.spinner('Generazione PDF in corso...'):
+                            try:
+                                pdf_bytes = WeasyHTML(string=st.session_state.last_html_menu).write_pdf()
+                                st.session_state.pdf_ready_menu = pdf_bytes
+                                st.success("✅ PDF pronto!")
+                            except Exception as e:
+                                st.error(f"Errore PDF: {e}")
+
+                if st.session_state.get('pdf_ready_menu'):
+                    st.download_button('📄 Scarica PDF',
+                                       st.session_state.pdf_ready_menu,
+                                       f'{nome_file_menu}.pdf', 'application/pdf',
+                                       use_container_width=True, key='side_save_pdf')
+
+        st.divider()
         nome_file_aper = st.text_input('Nome file aperitivi', 'Menu_Aperitivi')
 
     with st.expander('💾 Carica Progetto Menu'):
@@ -1460,450 +1554,324 @@ with tab_menu:
         if k not in st.session_state:
             st.session_state[k] = v
 
-    # ── Caricamento Word ────────────────────────────────────────
-    st.markdown('### 📂 Caricamento Testi')
-    col1, col2 = st.columns(2)
-    with col1:
-        file_it = st.file_uploader('🇮🇹 Word Italiano (.docx)', type=['docx'], key='pizza_it')
-    with col2:
-        file_en = st.file_uploader('🇬🇧 Word Inglese (.docx) — opzionale', type=['docx'], key='pizza_en')
+    col_editor, col_preview = st.columns([1.3, 1], gap="large")
 
-    col_btn, col_info = st.columns([1, 3])
-    with col_btn:
-        btn_estrai = st.button('🔄 Estrai e Analizza', type='primary',
-                               key='btn_pizza', use_container_width=True)
+    with col_editor:
+        # ── Caricamento Word ────────────────────────────────────────
+        st.markdown('### 📂 Caricamento Testi')
+        c_it, c_en = st.columns(2)
+        with c_it:
+            file_it = st.file_uploader('🇮🇹 Word Italiano (.docx)', type=['docx'], key='pizza_it')
+        with c_en:
+            file_en = st.file_uploader('🇬🇧 Word Inglese (.docx) — opzionale', type=['docx'], key='pizza_en')
 
-    if btn_estrai:
-        if file_it:
-            with st.spinner('Parser in esecuzione…'):
-                piatti_it, pattern_it = estrai_dati_word(file_it)
-                piatti_en, pattern_en = (estrai_dati_word(file_en) if file_en else ([], pattern_it))
+        col_btn, col_info = st.columns([1, 2])
+        with col_btn:
+            btn_estrai = st.button('🔄 Estrai e Analizza', type='primary',
+                                   key='btn_pizza', use_container_width=True)
 
-            dati_uniti = unisci_lingue(piatti_it, piatti_en)
-            df_new = pd.DataFrame(dati_uniti)
-            st.session_state.dati_menu    = df_new
-            st.session_state.menu_pattern = pattern_it
-            st.session_state.menu_json_id = None
-            st.session_state.menu_xlsx_id = None
-            st.session_state.piatto_sel   = None
+        if btn_estrai:
+            if file_it:
+                with st.spinner('Parser in esecuzione…'):
+                    piatti_it, pattern_it = estrai_dati_word(file_it)
+                    piatti_en, pattern_en = (estrai_dati_word(file_en) if file_en else ([], pattern_it))
 
-            n_it = len(piatti_it); n_en = len(piatti_en) if piatti_en else 0
-            n_cat = df_new['Categoria IT'].nunique()
-            with col_info:
-                lbl = PARSER_LABELS.get(pattern_it, pattern_it)
-                st.markdown(f'<span class="pattern-badge">✅ Pattern: {lbl}</span>',
-                            unsafe_allow_html=True)
-                if n_en and n_it != n_en:
-                    st.warning(f'⚠️ {n_it} piatti IT vs {n_en} EN — verifica allineamento nell\'editor.')
-                else:
-                    st.success(f'✅ {n_it} piatti · {n_cat} categorie estratte.')
-        else:
-            st.error('⚠️ Carica almeno il file Word italiano.')
-
-    # ── Carica progetto JSON ────────────────────────────────────
-    if progetto_caricato is not None:
-        fid = id(progetto_caricato)
-        if fid != st.session_state.menu_json_id:
-            try:
-                st.session_state.dati_menu    = _assicura_colonne_menu(pd.DataFrame(json.load(progetto_caricato)))
-                st.session_state.menu_json_id = fid
+                dati_uniti = unisci_lingue(piatti_it, piatti_en)
+                df_new = pd.DataFrame(dati_uniti)
+                st.session_state.dati_menu    = df_new
+                st.session_state.menu_pattern = pattern_it
+                st.session_state.menu_json_id = None
+                st.session_state.menu_xlsx_id = None
                 st.session_state.piatto_sel   = None
-                st.success('✅ Progetto JSON caricato.')
-            except Exception as e:
-                st.error(f'Errore JSON: {e}')
 
-    if progetto_xlsx is not None:
-        fid = id(progetto_xlsx)
-        if fid != st.session_state.menu_xlsx_id:
-            try:
-                st.session_state.dati_menu    = _assicura_colonne_menu(excel_bytes_to_df(progetto_xlsx.getvalue()))
-                st.session_state.menu_xlsx_id = fid
-                st.session_state.piatto_sel   = None
-                st.success('✅ Dati Excel caricati.')
-            except Exception as e:
-                st.error(f'Errore Excel: {e}')
-
-    # ── Editor ─────────────────────────────────────────────────
-    if not st.session_state.dati_menu.empty:
-        df_base = _assicura_colonne_menu(st.session_state.dati_menu.copy())
-        df_base = df_base.sort_values(['Pagina', 'Ordine']).reset_index(drop=True)
-        # Rifletti nel session state con indice pulito
-        st.session_state.dati_menu = df_base.copy()
-
-        st.divider()
-
-        # Metriche
-        n_tot = len(df_base)
-        n_vis = int(df_base['Visibile'].apply(_safe_bool).sum())
-        n_nd  = int((~df_base['Disponibile'].apply(_safe_bool)).sum())
-        n_cat = df_base['Categoria IT'].apply(_safe_str).nunique()
-        n_pag = df_base['Pagina'].apply(lambda x: _safe_int(x,1)).nunique()
-        mc1,mc2,mc3,mc4,mc5 = st.columns(5)
-        mc1.metric('📋 Piatti',         n_tot)
-        mc2.metric('👁️ Visibili',        n_vis)
-        mc3.metric('🔴 Non dispon.',     n_nd)
-        mc4.metric('📂 Categorie',       n_cat)
-        mc5.metric('📄 Pagine logiche',  n_pag)
-
-        # Aggiorna sidebar
-        mappa = build_mappa_pagine(df_base)
-        with _mappa_placeholder:
-            render_mappa_pagine(mappa)
-        with _layout_check_placeholder:
-            render_layout_check(df_base)
-
-        # ────────────────────────────────────────────────────────
-        # PANNELLO: Organizzazione Pagine (Assegnazione Massiva)
-        # ────────────────────────────────────────────────────────
-        with st.expander("🏗️ Organizzazione Pagine (Assegnazione Massiva)", expanded=False):
-            st.markdown("Sposta rapidamente tutte le portate di una categoria in una pagina specifica.")
-
-            # Ottieni categorie uniche mantenendo l'ordine
-            categorie_uniche = []
-            for c in df_base['Categoria IT'].apply(_safe_str).tolist():
-                if c and c not in categorie_uniche:
-                    categorie_uniche.append(c)
-
-            if categorie_uniche:
-                c1, c2, c3 = st.columns([2, 1, 1])
-                with c1:
-                    cat_da_spostare = st.selectbox("Seleziona Categoria", categorie_uniche)
-                with c2:
-                    nuova_pag_target = st.number_input("Alla Pagina", min_value=1, value=1, step=1)
-                with c3:
-                    st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
-                    if st.button("Sposta Tutti", use_container_width=True):
-                        mask = st.session_state.dati_menu['Categoria IT'].apply(_safe_str) == cat_da_spostare
-                        st.session_state.dati_menu.loc[mask, 'Pagina'] = int(nuova_pag_target)
-                        st.success(f"✅ Tutti i '{cat_da_spostare}' spostati a Pagina {nuova_pag_target}")
-                        st.rerun()
+                n_it = len(piatti_it); n_en = len(piatti_en) if piatti_en else 0
+                n_cat = df_new['Categoria IT'].nunique()
+                with col_info:
+                    lbl = PARSER_LABELS.get(pattern_it, pattern_it)
+                    st.markdown(f'<span class="pattern-badge">✅ Pattern: {lbl}</span>',
+                                unsafe_allow_html=True)
+                    if n_en and n_it != n_en:
+                        st.warning(f'⚠️ {n_it} piatti IT vs {n_en} EN — verifica allineamento nell\'editor.')
+                    else:
+                        st.success(f'✅ {n_it} piatti · {n_cat} categorie estratte.')
             else:
-                st.caption("Nessuna categoria trovata.")
+                st.error('⚠️ Carica almeno il file Word italiano.')
 
-        st.markdown('### ✏️ Editor Piatti')
-
-        # ────────────────────────────────────────────────────────
-        # PANNELLO: lista sinistra + form destra
-        # ────────────────────────────────────────────────────────
-        col_lista, col_form = st.columns([1, 2], gap="medium")
-
-        with col_lista:
-            st.markdown("**📋 Lista piatti**")
-
-            # Bottone aggiungi nuovo piatto
-            if st.button('➕ Nuovo Piatto', use_container_width=True, key='btn_nuovo'):
-                cat_attuale = _safe_str(df_base.iloc[-1]['Categoria IT']) if not df_base.empty else 'Menu'
-                new_ord = int(df_base['Ordine'].max()) + 1 if not df_base.empty else 1
-                new_row = pd.DataFrame([{
-                    'Ordine': new_ord, 'Pagina': 1, 'Separatore': SEP_LINEA,
-                    'Visibile': True, 'Disponibile': True,
-                    'Categoria IT': cat_attuale, 'Categoria EN': '',
-                    'Colore Cat.': '#b58d3d', 'Nome IT': '(nuovo piatto)', 'Nome EN': '',
-                    'Descrizione IT': '', 'Descrizione EN': '',
-                    'Prezzo': '', 'Allergeni': '', 'Note Chef': '',
-                    'Scala Piatto': 1.0, 'Spazio Extra': 0.0,
-                }])
-                st.session_state.dati_menu = pd.concat(
-                    [st.session_state.dati_menu, new_row], ignore_index=True
-                )
-                st.session_state.piatto_sel = len(st.session_state.dati_menu) - 1
-                st.rerun()
-
-            st.markdown("---")
-
-            # Raggruppa per categoria
-            df_ord = st.session_state.dati_menu.copy()
-            categorie = []
-            for cat in df_ord['Categoria IT'].apply(_safe_str).tolist():
-                if cat not in categorie:
-                    categorie.append(cat)
-
-            for cat in categorie:
-                mask = df_ord['Categoria IT'].apply(_safe_str) == cat
-                piatti_cat = df_ord[mask]
-                n_c = len(piatti_cat)
-                n_vis_c = piatti_cat['Visibile'].apply(_safe_bool).sum()
-
-                with st.expander(f"📂 {cat}  ({n_vis_c}/{n_c})", expanded=True):
-                    for idx, row_c in piatti_cat.iterrows():
-                        nome_c = _safe_str(row_c.get('Nome IT')) or '(senza nome)'
-                        is_avail = _safe_bool(row_c.get('Disponibile', True))
-                        is_vis_r = _safe_bool(row_c.get('Visibile', True))
-                        is_sel   = (st.session_state.piatto_sel == idx)
-
-                        icona = '▶ ' if is_sel else ''
-                        suf   = (' 🔴' if not is_avail else '') + (' 🚫' if not is_vis_r else '')
-                        label = f"{icona}{nome_c}{suf}"
-
-                        if st.button(label, key=f'sel_{idx}',
-                                     type='primary' if is_sel else 'secondary',
-                                     use_container_width=True):
-                            st.session_state.piatto_sel = idx
-                            st.rerun()
-
-        # ── Form di editing ─────────────────────────────────────
-        with col_form:
-            sel = st.session_state.piatto_sel
-            df_edit = st.session_state.dati_menu
-
-            # Valida selezione
-            if sel is None or sel not in df_edit.index:
-                st.info("👈 Seleziona un piatto dalla lista per modificarlo, oppure premi ➕ per aggiungerne uno nuovo.")
-            else:
-                row = df_edit.loc[sel]
-                nome_display = _safe_str(row.get('Nome IT', '')) or 'Nuovo Piatto'
-                st.markdown(f"**✏️ Modifica: {nome_display}**")
-
-                # Mini preview live (mostrata sopra le tab)
-                colore_cat = _norm_colore(row.get('Colore Cat.', '#b58d3d'))
-                preview_html = html_mini_preview(
-                    _safe_str(row.get('Nome IT','')), _safe_str(row.get('Nome EN','')),
-                    _safe_str(row.get('Descrizione IT','')), _safe_str(row.get('Descrizione EN','')),
-                    _safe_str(row.get('Prezzo','')), _safe_str(row.get('Allergeni','')),
-                    colore_cat, mostra_nome_en,
-                )
-                st.markdown(preview_html, unsafe_allow_html=True)
-
-                tab_contenuto, tab_layout_ed, tab_avanzato = st.tabs(
-                    ["📝 Contenuto", "📄 Layout & Pagina", "⚙️ Avanzato"]
-                )
-
-                # ── TAB CONTENUTO ─────────────────────────────
-                with tab_contenuto:
-                    with st.form(key=f'form_cont_{sel}'):
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            f_nome_it = st.text_input('🇮🇹 Nome IT',
-                                                      value=_safe_str(row.get('Nome IT','')))
-                        with c2:
-                            f_nome_en = st.text_input('🇬🇧 Nome EN',
-                                                      value=_safe_str(row.get('Nome EN','')))
-                        f_desc_it = st.text_area('📝 Descrizione IT',
-                                                 value=_safe_str(row.get('Descrizione IT','')),
-                                                 height=80)
-                        f_desc_en = st.text_area('📝 Descrizione EN',
-                                                 value=_safe_str(row.get('Descrizione EN','')),
-                                                 height=80)
-                        c3, c4 = st.columns(2)
-                        with c3:
-                            f_prezzo  = st.text_input('💶 Prezzo',
-                                                      value=_safe_str(row.get('Prezzo','')))
-                        with c4:
-                            f_allerg  = st.text_input('⚠️ Allergeni (es: 1, 7, 14)',
-                                                      value=_safe_str(row.get('Allergeni','')))
-                        c5, c6 = st.columns(2)
-                        with c5:
-                            f_vis  = st.checkbox('👁️ Visibile nel menu',
-                                                 value=_safe_bool(row.get('Visibile', True)))
-                        with c6:
-                            f_disp = st.checkbox('✅ Disponibile',
-                                                 value=_safe_bool(row.get('Disponibile', True)))
-
-                        f_forza_salto = st.checkbox('✂️ Forza nuova pagina prima di questo piatto',
-                                                    value=_safe_bool(row.get('Forza Salto Pagina', False)))
-
-                        f_note = st.text_input('📝 Note Chef (non stampate)',
-                                               value=_safe_str(row.get('Note Chef','')))
-
-                        cb1, cb2 = st.columns(2)
-                        with cb1:
-                            salvato = st.form_submit_button('💾 Salva', type='primary',
-                                                            use_container_width=True)
-                        with cb2:
-                            eliminato = st.form_submit_button('🗑️ Elimina', use_container_width=True)
-
-                    if salvato:
-                        for col_k, val_v in [
-                            ('Nome IT', f_nome_it), ('Nome EN', f_nome_en),
-                            ('Descrizione IT', f_desc_it), ('Descrizione EN', f_desc_en),
-                            ('Prezzo', f_prezzo), ('Allergeni', f_allerg),
-                            ('Visibile', f_vis), ('Disponibile', f_disp),
-                            ('Forza Salto Pagina', f_forza_salto), ('Note Chef', f_note),
-                        ]:
-                            st.session_state.dati_menu.loc[sel, col_k] = val_v
-                        st.success('✅ Salvato!')
-                        st.rerun()
-
-                    if eliminato:
-                        st.session_state.dati_menu = (
-                            st.session_state.dati_menu.drop(index=sel).reset_index(drop=True)
-                        )
-                        st.session_state.piatto_sel = None
-                        st.rerun()
-
-                # ── TAB LAYOUT ────────────────────────────────
-                with tab_layout_ed:
-                    with st.form(key=f'form_lay_{sel}'):
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            f_cat_it = st.text_input('📂 Categoria IT',
-                                                     value=_safe_str(row.get('Categoria IT','')))
-                        with c2:
-                            f_cat_en = st.text_input('📂 Categoria EN',
-                                                     value=_safe_str(row.get('Categoria EN','')))
-                        c3, c4 = st.columns(2)
-                        with c3:
-                            f_colore = st.text_input('🎨 Colore categoria (hex)',
-                                                     value=_safe_str(row.get('Colore Cat.','#b58d3d')))
-                        with c4:
-                            f_pagina = st.number_input('📄 Pagina logica', min_value=1,
-                                                       value=_safe_int(row.get('Pagina',1)))
-                        f_sep = st.selectbox('Separatore categoria',
-                                             SEP_OPTIONS,
-                                             index=SEP_OPTIONS.index(_norm_separatore(row.get('Separatore',SEP_LINEA))))
-                        f_scala  = st.slider('🔎 Scala testo piatto', 0.4, 2.0,
-                                             float(row.get('Scala Piatto', 1.0) or 1.0), 0.05)
-                        f_spazio = st.slider('↕️ Spazio extra', 0.0, 5.0,
-                                             float(row.get('Spazio Extra', 0.0) or 0.0), 0.25)
-
-                        # Bottoni riordina
-                        cu, cd, cs = st.columns(3)
-                        with cu:
-                            move_up   = st.form_submit_button('⬆️ Su', use_container_width=True)
-                        with cd:
-                            move_down = st.form_submit_button('⬇️ Giù', use_container_width=True)
-                        with cs:
-                            salva_lay = st.form_submit_button('💾 Salva', type='primary',
-                                                              use_container_width=True)
-
-                    if salva_lay:
-                        for col_k, val_v in [
-                            ('Categoria IT', f_cat_it), ('Categoria EN', f_cat_en),
-                            ('Colore Cat.', f_colore), ('Pagina', int(f_pagina)),
-                            ('Separatore', f_sep), ('Scala Piatto', f_scala),
-                            ('Spazio Extra', f_spazio),
-                        ]:
-                            st.session_state.dati_menu.loc[sel, col_k] = val_v
-                        st.success('✅ Layout salvato!')
-                        st.rerun()
-
-                    if move_up or move_down:
-                        df_tmp = st.session_state.dati_menu.copy()
-                        df_tmp = df_tmp.sort_values(['Pagina', 'Ordine']).reset_index()
-                        pos_in_sorted = df_tmp[df_tmp['index'] == sel].index
-                        if len(pos_in_sorted) > 0:
-                            pos = pos_in_sorted[0]
-                            if move_up and pos > 0:
-                                other_orig = df_tmp.iloc[pos - 1]['index']
-                                o1 = st.session_state.dati_menu.loc[sel, 'Ordine']
-                                o2 = st.session_state.dati_menu.loc[other_orig, 'Ordine']
-                                st.session_state.dati_menu.loc[sel, 'Ordine'] = o2
-                                st.session_state.dati_menu.loc[other_orig, 'Ordine'] = o1
-                            elif move_down and pos < len(df_tmp) - 1:
-                                other_orig = df_tmp.iloc[pos + 1]['index']
-                                o1 = st.session_state.dati_menu.loc[sel, 'Ordine']
-                                o2 = st.session_state.dati_menu.loc[other_orig, 'Ordine']
-                                st.session_state.dati_menu.loc[sel, 'Ordine'] = o2
-                                st.session_state.dati_menu.loc[other_orig, 'Ordine'] = o1
-                        st.rerun()
-
-                # ── TAB AVANZATO: editor tabella completo ──────
-                with tab_avanzato:
-                    st.caption('Vista tabella completa — modifica diretta tutte le colonne.')
-                    col_cfg_adv = {
-                        'Ordine': st.column_config.NumberColumn('Ordine ↕', min_value=0, step=1, format='%d', width='small'),
-                        'Pagina': st.column_config.NumberColumn('📄 Pag.', min_value=1, step=1, format='%d', width='small'),
-                        'Separatore': st.column_config.SelectboxColumn('Sep.', options=SEP_OPTIONS, width='small'),
-                        'Visibile':   st.column_config.CheckboxColumn('👁️', width='small'),
-                        'Disponibile':st.column_config.CheckboxColumn('✅', width='small'),
-                        'Forza Salto Pagina': st.column_config.CheckboxColumn('✂️', width='small'),
-                        'Scala Piatto':st.column_config.NumberColumn('Scala', min_value=0.4, max_value=2.0, step=0.05, format='%.2f', width='small'),
-                        'Spazio Extra':st.column_config.NumberColumn('Spazio', min_value=0.0, max_value=10.0, step=0.25, format='%.2f', width='small'),
-                        'Categoria IT': st.column_config.TextColumn('Cat IT', width='medium'),
-                        'Categoria EN': st.column_config.TextColumn('Cat EN', width='medium'),
-                        'Colore Cat.':  st.column_config.TextColumn('🎨', width='small'),
-                        'Nome IT':        st.column_config.TextColumn('Nome IT', width='large'),
-                        'Nome EN':        st.column_config.TextColumn('Nome EN', width='large'),
-                        'Descrizione IT': st.column_config.TextColumn('Desc IT', width='large'),
-                        'Descrizione EN': st.column_config.TextColumn('Desc EN', width='large'),
-                        'Prezzo':         st.column_config.TextColumn('€', width='small'),
-                        'Allergeni':      st.column_config.TextColumn('Allerg.', width='small'),
-                        'Note Chef':      st.column_config.TextColumn('Note', width='medium'),
-                    }
-                    df_adv_edit = st.data_editor(
-                        st.session_state.dati_menu,
-                        use_container_width=True, num_rows='dynamic', height=400,
-                        column_config=col_cfg_adv,
-                        column_order=['Ordine','Pagina','Separatore','Visibile','Disponibile','Forza Salto Pagina',
-                                      'Scala Piatto','Spazio Extra','Categoria IT','Categoria EN',
-                                      'Colore Cat.','Nome IT','Nome EN','Descrizione IT',
-                                      'Descrizione EN','Prezzo','Allergeni','Note Chef'],
-                        key='editor_tabella_adv',
-                    )
-                    if st.button('💾 Applica modifiche tabella', key='apply_adv', type='primary'):
-                        st.session_state.dati_menu = _assicura_colonne_menu(df_adv_edit.copy())
-                        st.success('✅ Tabella applicata.')
-                        st.rerun()
-
-        # ── Aggiorna sidebar con dati correnti ──────────────────
-        df_cur = _assicura_colonne_menu(st.session_state.dati_menu.copy())
-        with _mappa_placeholder:
-            render_mappa_pagine(build_mappa_pagine(df_cur))
-        with _layout_check_placeholder:
-            render_layout_check(df_cur)
-
-        # ── Anteprima e Esportazione ────────────────────────────
-        st.divider()
-        st.markdown('### 👁️ Anteprima e Esportazione')
-
-        df_export = _assicura_colonne_menu(st.session_state.dati_menu.copy())
-        base_font = round(zoom_foglio * 16.0, 2)
-
-        html_content = genera_html(
-            df=df_export,
-            logo_b64=get_image_base64(logo_file),
-            bg_b64=get_image_base64(bg_file),
-            stile_sfondo=stile_sfondo,
-            titolo_menu=titolo_menu,
-            testo_footer=testo_footer,
-            logo_size_px=logo_size,
-            base_font_px=base_font,
-            mostra_nome_en=mostra_nome_en,
-            mostra_cat_en=mostra_cat_en,
-            template_key=template_sel,
-            disabilita_autopaginazione=disabilita_autopaginazione,
-        )
-
-        n_fogli = html_content.count('class="foglio-a4"')
-        n_vis_e = int(df_export['Visibile'].apply(_safe_bool).sum())
-        n_nd_e  = int((~df_export['Disponibile'].apply(_safe_bool)).sum())
-
-        st.info(f'📄 Fogli: **{n_fogli}** · 👁️ {n_vis_e}/{len(df_export)} visibili · 🔴 {n_nd_e} non disponibili', icon='ℹ️')
-        st.components.v1.html(html_content, height=1200 + (n_fogli - 1) * 1160, scrolling=True)
-
-        st.divider()
-        ce1, ce2, ce3, ce4 = st.columns(4)
-        with ce1:
-            st.download_button('💾 Progetto (.json)',
-                               df_export.to_json(orient='records', force_ascii=False, indent=2),
-                               f'{nome_file_menu}.json', 'application/json',
-                               use_container_width=True)
-        with ce2:
-            try:
-                st.download_button('📊 Excel',
-                                   df_to_excel_bytes(df_export),
-                                   f'{nome_file_menu}.xlsx',
-                                   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                                   use_container_width=True)
-            except Exception as e:
-                st.warning(f'Excel: {e}')
-        with ce3:
-            st.download_button('📥 HTML Stampa',
-                               html_content.encode('utf-8'),
-                               f'{nome_file_menu}_Stampa.html',
-                               'text/html; charset=utf-8',
-                               use_container_width=True)
-        with ce4:
-            if PDF_DISPONIBILE:
+        # ── Carica progetto JSON ────────────────────────────────────
+    # Spostiamo il caricamento PRIMA dello split layout per evitare problemi di refresh
+        if progetto_caricato is not None:
+            fid = id(progetto_caricato)
+            if fid != st.session_state.menu_json_id:
                 try:
-                    with st.spinner('PDF…'):
-                        pdf_b = WeasyHTML(string=html_content).write_pdf()
-                    st.download_button('📄 PDF', pdf_b, f'{nome_file_menu}.pdf',
-                                       'application/pdf', use_container_width=True)
+                    st.session_state.dati_menu    = _assicura_colonne_menu(pd.DataFrame(json.load(progetto_caricato)))
+                    st.session_state.menu_json_id = fid
+                    st.session_state.piatto_sel   = None
+                    st.success('✅ Progetto JSON caricato.')
                 except Exception as e:
-                    st.error(f'WeasyPrint: {e}')
+                    st.error(f'Errore JSON: {e}')
+
+        if progetto_xlsx is not None:
+            fid = id(progetto_xlsx)
+            if fid != st.session_state.menu_xlsx_id:
+                try:
+                    st.session_state.dati_menu    = _assicura_colonne_menu(excel_bytes_to_df(progetto_xlsx.getvalue()))
+                    st.session_state.menu_xlsx_id = fid
+                    st.session_state.piatto_sel   = None
+                    st.success('✅ Dati Excel caricati.')
+                except Exception as e:
+                    st.error(f'Errore Excel: {e}')
+
+        # ── Editor ─────────────────────────────────────────────────
+        if not st.session_state.dati_menu.empty:
+            df_base = _assicura_colonne_menu(st.session_state.dati_menu.copy())
+            df_base = df_base.sort_values(['Pagina', 'Ordine']).reset_index(drop=True)
+            st.session_state.dati_menu = df_base.copy()
+
+            st.divider()
+
+            # Tabs Editor
+            tab_db, tab_builder = st.tabs(['🗄️ Database Piatti', '📐 Page Builder'])
+
+            with tab_db:
+                st.markdown('### 📋 Gestione Contenuti')
+                st.caption("Modifica qui i testi, i prezzi e gli allergeni. Le impostazioni di layout sono nel Tab 'Page Builder'.")
+
+                # Definiamo le colonne da mostrare nel Database
+                cols_db = [
+                    'Ordine', 'Categoria IT', 'Categoria EN', 'Nome IT', 'Nome EN',
+                    'Descrizione IT', 'Descrizione EN', 'Prezzo', 'Allergeni',
+                    'Visibile', 'Disponibile'
+                ]
+
+                # Assicuriamoci che tutte le colonne esistano (fallback)
+                df_db = _assicura_colonne_menu(st.session_state.dati_menu.copy())
+
+                # Configurazione colonne per st.data_editor
+                col_cfg_db = {
+                    'Ordine': st.column_config.NumberColumn('Ordine ↕', min_value=0, step=1, format='%d', width='small'),
+                    'Categoria IT': st.column_config.TextColumn('Categoria IT', width='medium'),
+                    'Categoria EN': st.column_config.TextColumn('Categoria EN', width='medium'),
+                    'Nome IT': st.column_config.TextColumn('Nome IT', width='large'),
+                    'Nome EN': st.column_config.TextColumn('Nome EN', width='large'),
+                    'Descrizione IT': st.column_config.TextColumn('Descrizione IT', width='large'),
+                    'Descrizione EN': st.column_config.TextColumn('Descrizione EN', width='large'),
+                    'Prezzo': st.column_config.TextColumn('€', width='small'),
+                    'Allergeni': st.column_config.TextColumn('Allergeni', width='small'),
+                    'Visibile': st.column_config.CheckboxColumn('👁️', width='small'),
+                    'Disponibile': st.column_config.CheckboxColumn('✅', width='small'),
+                }
+
+                # Editor dati filtrato
+                edited_df_db = st.data_editor(
+                    df_db,
+                    column_order=cols_db,
+                    column_config=col_cfg_db,
+                    use_container_width=True,
+                    num_rows="dynamic",
+                    key="db_editor_main"
+                )
+
+                # Salvataggio modifiche
+                if st.button("💾 Salva Modifiche Database", type="primary", use_container_width=True):
+                    # Uniamo le colonne modificate con quelle nascoste (layout) che non erano nell'editor
+                    # Poiché edited_df_db contiene TUTTE le colonne (anche se non mostrate), possiamo usarlo direttamente
+                    st.session_state.dati_menu = _assicura_colonne_menu(edited_df_db.copy())
+                    st.success("✅ Database piatti aggiornato!")
+                    st.rerun()
+
+            with tab_builder:
+                st.markdown('### 🏗️ Visual Page Builder')
+            st.caption("Organizza le categorie nelle pagine e regola il micro-layout di ogni blocco.")
+
+            df_pb = _assicura_colonne_menu(st.session_state.dati_menu.copy())
+            if df_pb.empty:
+                st.info("Carica dei dati per iniziare a comporre le pagine.")
             else:
-                st.info('WeasyPrint non installato:\n```\npip install weasyprint\n```', icon='ℹ️')
+                # 1. Calcolo metriche di riempimento per pagina (usando la logica esistente)
+                # (Questa parte verrà raffinata nel prossimo step del piano)
+
+                # 2. Identificazione Pagine e Categorie
+                max_pags = int(df_pb['Pagina'].max())
+                # Permettiamo di vedere fino a max_pags + 1 per spostare roba in una nuova pagina
+                num_colonne = max(2, max_pags + 1)
+
+                # Layout a colonne Streamlit (limitiamo a 3-4 per riga per leggibilità)
+                cols_kanban = st.columns(3) # Mostriamo 3 pagine per riga
+
+                for p_idx in range(1, num_colonne + 1):
+                    with cols_kanban[(p_idx-1) % 3]:
+                        # Calcolo riempimento pagina per l'indicatore visuale
+                        df_pag = df_pb[df_pb['Pagina'] == p_idx].sort_values('Ordine')
+
+                        usata_pag = 0.0
+                        for _, r_p in df_pag.iterrows():
+                            if _safe_bool(r_p.get('Visibile', True)):
+                                usata_pag += _stima_piatto(r_p)
+
+                        cap_pag = _disp_foglio(p_idx == 1)
+                        pct_pag = usata_pag / cap_pag
+                        bar_pag = min(pct_pag * 100, 100)
+                        col_bar = '#27ae60' if pct_pag < 0.85 else '#f39c12' if pct_pag < 1.0 else '#e74c3c'
+
+                        st.markdown(f"#### 📄 Pagina {p_idx}")
+                        st.markdown(f"""
+                        <div style="background:#e8e8e8;border-radius:4px;height:6px;margin-bottom:2px;">
+                            <div style="background:{col_bar};width:{bar_pag:.1f}%;height:6px;border-radius:4px;"></div>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;font-size:0.7em;margin-bottom:10px;">
+                            <span>Riempimento</span>
+                            <span style="color:{col_bar};font-weight:700;">{round(pct_pag*100)}%</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        if pct_pag > 1.0:
+                            st.error("⚠️ Sbordamento: verrà creata un'ulteriore pagina.")
+
+                        # Piatti in questa pagina
+
+                        # Raggruppiamo per categoria (mantenendo l'ordine dei piatti)
+                        categorie_in_pag = []
+                        for c in df_pag['Categoria IT'].unique():
+                            if c: categorie_in_pag.append(c)
+
+                        if not categorie_in_pag:
+                            st.write("*(Vuota)*")
+
+                        for cat_name in categorie_in_pag:
+                            # Card per la categoria
+                            with st.container(border=True):
+                                c1, c2 = st.columns([3, 1])
+                                c1.markdown(f"**📂 {cat_name}**")
+
+                                # Controlli Micro-Layout (Popover)
+                                with c2:
+                                    with st.popover("⚙️"):
+                                        st.markdown(f"**Layout: {cat_name}**")
+                                        # Prendiamo il primo piatto della categoria per i valori di default
+                                        # (Assumiamo che la categoria sia l'unità di scala/spazio per semplicità UX)
+                                        mask_cat = (df_pb['Categoria IT'] == cat_name)
+                                        first_row = df_pb[mask_cat].iloc[0]
+
+                                        new_colore = st.color_picker("Colore Titolo", value=_norm_colore(first_row.get('Colore Cat.', '#b58d3d')), key=f"cp_{cat_name}_{p_idx}")
+                                        new_scala = st.slider("Scala Testo", 0.4, 2.0, float(first_row.get('Scala Piatto', 1.0)), 0.05, key=f"sc_{cat_name}_{p_idx}")
+                                        new_spazio = st.slider("Spazio Extra", 0.0, 5.0, float(first_row.get('Spazio Extra', 0.0)), 0.25, key=f"sp_{cat_name}_{p_idx}")
+
+                                        if st.button("Applica a tutti i piatti", key=f"btn_app_{cat_name}_{p_idx}"):
+                                            st.session_state.dati_menu.loc[mask_cat, 'Colore Cat.'] = new_colore
+                                            st.session_state.dati_menu.loc[mask_cat, 'Scala Piatto'] = new_scala
+                                            st.session_state.dati_menu.loc[mask_cat, 'Spazio Extra'] = new_spazio
+                                            st.rerun()
+
+                                # Frecce spostamento pagina
+                                b1, b2, b3, b4 = st.columns(4)
+                                with b1:
+                                    if p_idx > 1:
+                                        if st.button("⬅️", key=f"p_prev_{cat_name}_{p_idx}", help="Sposta a pagina precedente"):
+                                            mask_cat = (st.session_state.dati_menu['Categoria IT'] == cat_name) & (st.session_state.dati_menu['Pagina'] == p_idx)
+                                            st.session_state.dati_menu.loc[mask_cat, 'Pagina'] = p_idx - 1
+                                            st.rerun()
+                                with b2:
+                                    if st.button("➡️", key=f"p_next_{cat_name}_{p_idx}", help="Sposta a pagina successiva"):
+                                        mask_cat = (st.session_state.dati_menu['Categoria IT'] == cat_name) & (st.session_state.dati_menu['Pagina'] == p_idx)
+                                        st.session_state.dati_menu.loc[mask_cat, 'Pagina'] = p_idx + 1
+                                        st.rerun()
+
+                                # Spostamento Ordine (Su/Giù)
+                                with b3:
+                                    if st.button("⬆️", key=f"o_up_{cat_name}_{p_idx}", help="Sposta su"):
+                                        # Trova la categoria precedente in questa pagina
+                                        idx_cat = categorie_in_pag.index(cat_name)
+                                        if idx_cat > 0:
+                                            prev_cat = categorie_in_pag[idx_cat - 1]
+                                            # Scambia gli ordini massimi/minimi o semplicemente sposta tutti i piatti
+                                            # Più semplice: scambia il valore 'Ordine' tra i blocchi
+                                            ord_cat = st.session_state.dati_menu[st.session_state.dati_menu['Categoria IT'] == cat_name]['Ordine'].min()
+                                            ord_prev = st.session_state.dati_menu[st.session_state.dati_menu['Categoria IT'] == prev_cat]['Ordine'].min()
+
+                                            mask_cat = (st.session_state.dati_menu['Categoria IT'] == cat_name)
+                                            mask_prev = (st.session_state.dati_menu['Categoria IT'] == prev_cat)
+
+                                            # Shift ordini
+                                            st.session_state.dati_menu.loc[mask_cat, 'Ordine'] -= 100
+                                            st.session_state.dati_menu.loc[mask_prev, 'Ordine'] += 100
+                                            st.rerun()
+
+                                with b4:
+                                    if st.button("⬇️", key=f"o_down_{cat_name}_{p_idx}", help="Sposta giù"):
+                                        idx_cat = categorie_in_pag.index(cat_name)
+                                        if idx_cat < len(categorie_in_pag) - 1:
+                                            next_cat = categorie_in_pag[idx_cat + 1]
+                                            mask_cat = (st.session_state.dati_menu['Categoria IT'] == cat_name)
+                                            mask_next = (st.session_state.dati_menu['Categoria IT'] == next_cat)
+
+                                            st.session_state.dati_menu.loc[mask_cat, 'Ordine'] += 100
+                                            st.session_state.dati_menu.loc[mask_next, 'Ordine'] -= 100
+                                            st.rerun()
+
+                                # Dettaglio Piatti (Expander)
+                                with st.expander("Piatti e Salti Pagina", expanded=False):
+                                    df_cat_piatti = df_pag[df_pag['Categoria IT'] == cat_name]
+                                    for idx, p_row in df_cat_piatti.iterrows():
+                                        st.markdown(f"- {p_row['Nome IT']}")
+                                        fs = st.checkbox("Salto Pagina", value=_safe_bool(p_row.get('Forza Salto Pagina', False)), key=f"fs_{idx}")
+                                        if fs != _safe_bool(p_row.get('Forza Salto Pagina', False)):
+                                            st.session_state.dati_menu.loc[idx, 'Forza Salto Pagina'] = fs
+                                            st.rerun()
+
+                    # Se abbiamo riempito una riga di 3, facciamo spazio per la prossima riga (automatico in st.columns)
+
+    with col_preview:
+        st.markdown('### 👁️ Anteprima Live')
+        if not st.session_state.dati_menu.empty:
+            # Rendering anteprima
+            df_export = _assicura_colonne_menu(st.session_state.dati_menu.copy())
+            base_font = round(zoom_foglio * 16.0, 2)
+            html_content = genera_html(
+                df=df_export,
+                logo_b64=get_image_base64(logo_file),
+                bg_b64=get_image_base64(bg_file),
+                stile_sfondo=stile_sfondo,
+                titolo_menu=titolo_menu,
+                testo_footer=testo_footer,
+                logo_size_px=logo_size,
+                base_font_px=base_font,
+                mostra_nome_en=mostra_nome_en,
+                mostra_cat_en=mostra_cat_en,
+                template_key=template_sel,
+                disabilita_autopaginazione=disabilita_autopaginazione,
+            )
+            n_fogli = html_content.count('class="foglio-a4"')
+            st.info(f'📄 Fogli: **{n_fogli}**', icon='ℹ️')
+            st.components.v1.html(html_content, height=1000, scrolling=True)
+
+            # Salvataggio HTML per sidebar e PDF
+            st.session_state.last_html_menu = html_content
+
+            # Bottoni export rapidi sotto preview
+            st.divider()
+            ce1, ce2 = st.columns(2)
+            with ce1:
+                st.download_button('💾 Progetto (.json)',
+                                   df_export.to_json(orient='records', force_ascii=False, indent=2),
+                                   f'{nome_file_menu}.json', 'application/json',
+                                   use_container_width=True, key='btn_export_json_preview')
+            with ce2:
+                if PDF_DISPONIBILE:
+                    # Bottone che attiva la generazione e il download
+                    if st.button('📄 Genera PDF', use_container_width=True, key='btn_gen_pdf_preview'):
+                        with st.spinner('Rendering...'):
+                            try:
+                                pdf_b = WeasyHTML(string=html_content).write_pdf()
+                                st.session_state.pdf_ready_menu = pdf_b
+                            except Exception as e:
+                                st.error(f"Errore: {e}")
+
+                    if st.session_state.get('pdf_ready_menu'):
+                        st.download_button('⬇️ Scarica PDF', st.session_state.pdf_ready_menu,
+                                           f'{nome_file_menu}.pdf', 'application/pdf',
+                                           use_container_width=True, key='btn_dl_pdf_preview')
+        else:
+            st.info("Carica un file Word o un progetto per vedere l'anteprima.")
 
 
 # ═══════════════════════════════════════════════════════════════════
